@@ -1,0 +1,106 @@
+#! /usr/bin/bash
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+
+# git-sync
+# https://github.com/ctubbsii/git-sync
+# version 1.0.0
+
+set -e
+
+finishedUpdates=('HEAD')
+
+# check if running in a color terminal
+terminalSupportsColor() {
+  local c; c=$(tput colors 2>/dev/null) || c=-1
+  [[ -t 1 ]] && [[ $c -ge 8 ]]
+}
+terminalSupportsColor && doColor=1 || doColor=0
+
+color() { local c; c=$1; shift; [[ $doColor -eq 1 ]] && echo -e "\\e[0;${c}m${*}\\e[0m" || echo "$@"; }
+red() { color 31 "$@"; }
+green() { color 32 "$@"; }
+yellow() { color 33 "$@"; }
+
+function ifDone() {
+  local x b=$1
+  for x in "${finishedUpdates[@]}"; do
+    [[ $x == "$b" ]] && return 0
+  done
+  return 1
+}
+
+function markDone() {
+  local b=$1
+  finishedUpdates+=("$b")
+}
+
+function updateWorktrees() {
+  local worktrees w b r t
+  #IFS=$'\n' worktrees=($(git worktree list --porcelain | grep ^worktree | cut -c10-))
+  mapfile -t worktrees < <(git worktree list --porcelain | grep ^worktree | cut -c10-)
+  for w in "${worktrees[@]}"; do
+    b=$(cd "$w" && git rev-parse --abbrev-ref HEAD)
+
+    ifDone "$b" && continue
+    markDone "$b"
+
+    if [[ -n $(cd "$w" && git status --porcelain --ignored=matching) ]]; then
+      echo "Skipping $(red "$b"): workspace dirty at $(yellow "$w")"
+    else
+      r=$(git config "branch.$b.remote")
+      t=$(git config "branch.$b.merge" | cut -f3- -d/)
+      if [[ -z $t ]]; then
+        echo "Skipping $(red "$b"): no remote tracking branch"
+      else
+        if ! git show-branch remotes/"$r/$t" &>/dev/null; then
+          echo "Skipping $(red "$b"): remote branch $(yellow "$r/$t") gone"
+        else
+          echo "Updating $(green "$b") ($(yellow "$w")) ..."
+          (cd "$w" && git merge --ff-only "$r/$t")
+        fi
+      fi
+    fi
+  done
+}
+
+function updateOthers() {
+  local b r t
+  # for each branch with a remote tracking branch
+  for b in $(git config  --get-regexp '^branch[.][^ ]*[.]merge$' | awk '{print $1}'); do
+    # strip out branch name
+    b=${b#branch.}
+    b=${b%.merge}
+
+    ifDone "$b" && continue
+    markDone "$b"
+
+    # get remote and tracking branch
+    r=$(git config "branch.$b.remote")
+    t=$(git config "branch.$b.merge" | cut -f3- -d/)
+    if ! git show-branch "remotes/$r/$t" &>/dev/null; then
+      echo "Skipping $(red "$b"): remote branch $(yellow "$r/$t") gone"
+    else
+      echo "Updating $(green "$b") ..."
+      git fetch . "remotes/$r/$t:$b"
+    fi
+  done
+}
+
+# update checked out branches first, then the rest
+git remote update --prune
+updateWorktrees
+updateOthers
+git branch -vv
+
