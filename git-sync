@@ -56,7 +56,7 @@ function updateWorktrees() {
     ifDone "$b" && continue
     markDone "$b"
 
-    if [[ -n $(cd "$w" && git status --porcelain --ignored=matching) ]]; then
+    if [[ -n $(cd "$w" && git status --porcelain --ignored=no) ]]; then
       echo "Skipping $(red "$b"): workspace dirty at $(yellow "$w")"
     else
       r=$(git config "branch.$b.remote")
