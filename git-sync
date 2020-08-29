@@ -15,127 +15,179 @@
 
 # git-sync
 # https://github.com/ctubbsii/git-sync
-function git_sync_version() {
-  echo '1.1.0'
-}
+GIT_SYNC_VERSION='1.2.0'
 
-function usage() {
-  echo "Usage: git sync [-V | --version | -v | --verbose]"
-}
+# catch most errors
+set -eE
+trap 'echo "[ERROR] Error occurred at $BASH_SOURCE:$LINENO command: $BASH_COMMAND"' ERR
 
-set -e
-finishedUpdates=('HEAD')
-
-# check if running in a color terminal
-function terminalSupportsColor() {
-  local c; c=$(tput colors 2>/dev/null) || c=-1
-  [[ -t 1 ]] && [[ $c -ge 8 ]]
-}
+# utilities for color output
+function terminalSupportsColor() { local c; c=$(tput colors 2>/dev/null) || c=-1; [[ -t 1 && $c -ge 8 ]]; }
 terminalSupportsColor && doColor=1 || doColor=0
-
 function color() { local c; c=$1; shift; [[ $doColor -eq 1 ]] && echo -e "\\e[0;${c}m${*}\\e[0m" || echo "$@"; }
 function red() { color 31 "$@"; }
 function green() { color 32 "$@"; }
 function yellow() { color 33 "$@"; }
 
-function ifDone() {
-  local x b=$1 isDone=1
-  for x in "${finishedUpdates[@]}"; do
-    [[ $x == "$b" ]] && isDone=0 && break
-  done
-  finishedUpdates+=("$b")
-  return $isDone
+# utility that attempts to shorten the provided directory names by making it relative
+function relDir() {
+  local orig=$1 rel
+  # allow override
+  if [[ -n $GIT_SYNC_ABS_DIRS ]]; then echo "$orig"; return 0; fi
+  # shellcheck disable=SC2088 # tilde intended literally, expansion not expected
+  rel="~/$(realpath --relative-to="$(cd ~ && pwd)" "$orig" 2>/dev/null)" || rel=$orig
+  # never make the current directory relative and avoid ../
+  # shellcheck disable=SC2088 # tilde intended literally, expansion not expected
+  if [[ ${#orig} -le ${#rel} || $rel == '~/.' || $rel =~ \.\. ]]; then echo "$orig"; else echo "$rel"; fi
 }
 
-function updateWorktrees() {
-  local worktrees w b r t
-  #IFS=$'\n' worktrees=($(git worktree list --porcelain | grep ^worktree | cut -c10-))
-  mapfile -t worktrees < <(git worktree list --porcelain | grep ^worktree | cut -c10-)
-  for w in "${worktrees[@]}"; do
-    b=$(cd "$w" && git rev-parse --abbrev-ref HEAD)
+# output utilities
+function log() {
+  local prefix=$1 bColor=$2 b=$3 wColor=$4 w=$5 suffix=$6 msg=''
+  [[ -n $bColor ]] || bColor='echo'
+  [[ -n $wColor ]] || wColor='echo'
+  [[ -n $prefix ]] && msg+=$prefix
+  [[ -n $b ]] && msg+=" $($bColor "$b")"
+  [[ -n $w ]] && msg+=" ($($wColor "$(relDir "$w")"))"
+  [[ -n $suffix ]] && msg+=$suffix
+  # this has to print to stderr, because some functions use this log function
+  # that also need to echo to stdout for returning a value to the caller
+  echo -e "$msg" 1>&2
+}
+function isVerbose() { [[ $GIT_SYNC_VERBOSE -ge 1 ]] || return 1; }
+function isVVerbose() { [[ $GIT_SYNC_VERBOSE -ge 2 ]] || return 1; }
+function logVerbose() { if isVerbose; then log "$@"; fi }
+function logVVerbose() { if isVVerbose; then log "$@"; fi }
+function usage() { log 'Usage: git sync [-V | --version | -v | --verbose | -vv | --very-verbose]'; }
 
-    [[ $b == 'HEAD' ]] && echo "Skipping $(red "$w"): no remote tracking branch for worktree"
-    ifDone "$b" && continue
+# get the remote tracking branch information, given a local branch name
+function remoteBranch() {
+  local b=$1 w=$2 r m
+  r=$(git config "branch.$b.remote" || :)
+  m=$(git config "branch.$b.merge" || :)
+  if [[ $m =~ ^refs/heads/.*$ ]]; then
+    m=${m#refs/heads/}
+    if [[ -n $r && -n $m ]]; then echo "$r/$m"; fi
+  elif [[ -n $m ]]; then
+    logVerbose '-- Skipping' red "$b" yellow "$w" ": unsupported remote tracking branch $(yellow "$m")"
+    return 1
+  else
+    logVVerbose '-- Skipping' green "$b" yellow "$w" ': not tracking a remote branch'
+    return 1
+  fi
+}
 
-    if [[ -n $(cd "$w" && git status --porcelain --ignored=no) ]]; then
-      echo "Skipping $(red "$b"): workspace dirty at $(yellow "$w")"
-    else
-      r=$(git config "branch.$b.remote")
-      t=$(git config "branch.$b.merge" | cut -f3- -d/)
-      if [[ -z $t ]]; then
-        echo "Skipping $(red "$b"): no remote tracking branch"
-      else
-        if ! git show-branch remotes/"$r/$t" &>/dev/null; then
-          echo "Skipping $(red "$b"): remote branch $(yellow "$r/$t") gone"
-        else
-          if [[ $(cd "$w" && git rev-parse HEAD) == "$(git rev-parse "$r/$t")" ]]; then
-            [[ $GIT_SYNC_VERBOSE -eq 1 ]] && echo "Skipping $(green "$b") ($(yellow "$w")): already up-to-date"
-            continue
-          else
-            echo "Updating $(green "$b") ($(yellow "$w")) ..."
-            (cd "$w" && git merge --ff-only "$r/$t")
-          fi
-        fi
-      fi
+# track the branches already finished updating
+GIT_SYNC_ALREADY_UPDATED_BRANCHES=()
+function alreadyDone() {
+  local x b=$1
+  for x in "${GIT_SYNC_ALREADY_UPDATED_BRANCHES[@]}"; do
+    if [[ $x == "$b" ]]; then
+      logVVerbose '-- Skipping' yellow "$b" '' '' ': checked out worktree branch already processed'
+      return 0
     fi
   done
+  GIT_SYNC_ALREADY_UPDATED_BRANCHES+=("$b")
+  return 1
 }
 
-function updateOthers() {
-  local b r t
-  # for each branch with a remote tracking branch
-  for b in $(git config  --get-regexp '^branch[.][^ ]*[.]merge$' | awk '{print $1}'); do
-    # strip out branch name
-    b=${b#branch.}
-    b=${b%.merge}
-
-    ifDone "$b" && continue
-
-    # get remote and tracking branch
-    r=$(git config "branch.$b.remote")
-    t=$(git config "branch.$b.merge" | cut -f3- -d/)
-    if ! git show-branch "remotes/$r/$t" &>/dev/null; then
-      echo "Skipping $(red "$b"): remote branch $(yellow "$r/$t") gone"
-    else
-      if [[ $(git rev-parse "$b") == "$(git rev-parse "remotes/$r/$t")" ]]; then
-        [[ $GIT_SYNC_VERBOSE -eq 1 ]] && echo "Skipping $(green "$b"): already up-to-date"
-        continue
-      else
-        echo "Updating $(green "$b") ..."
-        git fetch . "remotes/$r/$t:$b"
-      fi
-    fi
-  done
+# determine if the branch should not be updated and why
+function shouldSkip() {
+  local b=$1 rb=$2 w=$3
+  if ! git show-branch "remotes/$rb" &>/dev/null; then
+    log '-- Skipping' red "$b" yellow "$w" ": remote tracking branch $(yellow "$rb") is $(red gone)"
+  elif git merge-base --is-ancestor "remotes/$rb" "refs/heads/$b"; then
+    logVVerbose '-- Skipping' green "$b" yellow "$w" ": already up-to-date with $(yellow "$rb")"
+  elif [[ -n $w && -n $(cd "$w" && git status --porcelain --ignored=no) ]]; then
+    log '-- Skipping' red "$b" yellow "$w" ": cannot update $(red dirty workspace)"
+  else
+    return 1
+  fi
 }
 
-function git_sync_update() {
-  if [[ $GIT_SYNC_VERBOSE -eq 1 ]]; then
+# update single branch at a time
+function updateBranch() {
+  local b=$1 w=$2 rb
+  alreadyDone "$b" && return 0
+  rb=$(remoteBranch "$b" "$w") || return 0
+  shouldSkip "$b" "$rb" "$w" && return 0
+  log '++ Updating' green "$b" yellow "$w" ' ...'
+  if [[ -z $w ]]; then
+    # update a branch not checked out; don't halt if error, proceed to next branch
+    git fetch . "remotes/$rb:refs/heads/$b" || :
+  else
+    # update a worktree; don't halt if error, proceed to next branch
+    (cd "$w" && git merge --ff-only "$rb") || :
+  fi
+}
+
+# get branch for a given worktree (unless there's a problem with the worktree)
+function worktreeBranch() {
+  local w=$1 b
+  # normally, a missing worktree would have been pruned, but it might be locked
+  if [[ ! -d $w ]]; then
+    logVerbose '-- Skipping' '' '' red "$w" ": worktree does not exist (probably $(red locked))"
+    return 1
+  elif [[ "$(cd "$w" && git rev-parse --is-inside-work-tree 2>/dev/null)" == 'false' ]]; then
+    logVerbose '-- Skipping' '' '' yellow "$w" ": worktree is $(red BARE)"
+    return 1
+  fi
+  b=$(cd "$w" && git rev-parse --abbrev-ref HEAD 2>/dev/null) || b='HEAD'
+  if [[ $b == 'HEAD' ]]; then
+    logVVerbose '-- Skipping' '' '' yellow "$w" ': worktree is not a branch'
+    return 1
+  fi
+  echo "$b"
+}
+
+function git_sync_main() {
+  local worktrees w b
+  if [[ ${#@} -ge 2 ]]; then usage && return 1
+  elif [[ ${#@} -eq 1 ]]; then
+    case "$1" in
+      -V|--version) echo "$GIT_SYNC_VERSION" && return 0 ;;
+      -v|--verbose) GIT_SYNC_VERBOSE=1 ;;
+      -vv|--very-verbose) GIT_SYNC_VERBOSE=2 ;;
+      *) usage && return 1 ;;
+    esac
+  fi
+
+  # fetch from remotes
+  logVerbose ": $(yellow Updating) $(green remotes) ..."
+  if isVerbose; then
     git remote update --prune
   else
     git remote update --prune 1>/dev/null
   fi
-  # update checked out branches first, then the rest
-  updateWorktrees
-  updateOthers
-  if [[ $GIT_SYNC_VERBOSE -eq 1 ]]; then
-    git branch -vv
-  fi
+
+  # remove any non-existent worktrees
+  logVerbose ": $(yellow Pruning) $(green worktrees) ..."
+  git worktree prune -v
+
+  # update branches checked out in a worktree first
+  logVerbose ": $(yellow Checking) $(green worktrees) ..."
+  #IFS=$'\n' worktrees=($(git worktree list --porcelain | grep ^worktree | cut -c10-))
+  mapfile -t worktrees < <(git worktree list --porcelain | grep ^worktree | cut -c10-)
+  for w in "${worktrees[@]}"; do
+    b=$(worktreeBranch "$w") && updateBranch "$b" "$w"
+  done
+
+  # update remaining branches not currently checked out in a worktree
+  logVerbose ": $(yellow Checking) $(green all local branches) ..."
+  git for-each-ref 'refs/heads/' --format='%(refname)' | while read -r b; do
+    updateBranch "${b#refs/heads/}"
+  done
+
+  # display updated branches
+  logVVerbose ": $(yellow Listing) $(green all local branches) ..."
+  isVVerbose && git branch -vv --color
+
+  # indicate done
+  logVerbose ": $(yellow Done)"
 }
 
-function git_sync_main() {
-  if [[ ${#@} -gt 1 ]]; then
-    usage
-    return 1
-  elif [[ ${#@} -eq 1 ]]; then
-    case "$1" in
-      -V|--version) git_sync_version && return 0 ;;
-      -v|--verbose) GIT_SYNC_VERBOSE=1 ;;
-      *) usage && return 1 ;;
-    esac
-  fi
-  git_sync_update
-}
-
-git_sync_main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  git_sync_main "$@" || exit 1
+fi
 
 # git-sync
