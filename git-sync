@@ -15,7 +15,7 @@
 
 # git-sync
 # https://github.com/ctubbsii/git-sync
-GIT_SYNC_VERSION='1.2.0'
+GIT_SYNC_VERSION='1.2.1'
 
 # catch most errors
 set -eE
@@ -34,10 +34,12 @@ function relDir() {
   local orig=$1 rel
   # allow override
   if [[ -n $GIT_SYNC_ABS_DIRS ]]; then echo "$orig"; return 0; fi
-  # shellcheck disable=SC2088 # tilde intended literally, expansion not expected
+  # tilde intended literally, expansion not expected
+  # shellcheck disable=SC2088
   rel="~/$(realpath --relative-to="$(cd ~ && pwd)" "$orig" 2>/dev/null)" || rel=$orig
   # never make the current directory relative and avoid ../
-  # shellcheck disable=SC2088 # tilde intended literally, expansion not expected
+  # tilde intended literally, expansion not expected
+  # shellcheck disable=SC2088
   if [[ ${#orig} -le ${#rel} || $rel == '~/.' || $rel =~ \.\. ]]; then echo "$orig"; else echo "$rel"; fi
 }
 
