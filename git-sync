@@ -15,7 +15,7 @@
 
 # git-sync
 # https://github.com/ctubbsii/git-sync
-GIT_SYNC_VERSION='1.2.1'
+GIT_SYNC_VERSION='1.3.0'
 
 # catch most errors
 set -eE
@@ -60,7 +60,7 @@ function isVerbose() { [[ $GIT_SYNC_VERBOSE -ge 1 ]] || return 1; }
 function isVVerbose() { [[ $GIT_SYNC_VERBOSE -ge 2 ]] || return 1; }
 function logVerbose() { if isVerbose; then log "$@"; fi }
 function logVVerbose() { if isVVerbose; then log "$@"; fi }
-function usage() { log 'Usage: git sync [-V | --version | -v | --verbose | -vv | --very-verbose]'; }
+function usage() { log 'Usage: git sync [self] [-V | --version | -v | --verbose | -vv | --very-verbose]'; }
 
 # get the remote tracking branch information, given a local branch name
 function remoteBranch() {
@@ -144,6 +144,19 @@ function worktreeBranch() {
 
 function git_sync_main() {
   local worktrees w b
+  if [[ ${#@} -eq 1 || ${#@} -eq 2 ]] && [[ $1 == "self" && -z $GIT_SYNC_IN_SELF_LOOP ]]; then
+    GIT_SYNC_IN_SELF_LOOP=1
+    shift
+    cd "$(dirname "$(readlink -f "$0")")" || return 1
+    if git rev-parse --git-dir &>/dev/null; then
+      git_sync_main "$@" || return 1
+      return 0
+    else
+      echo "Syncing $(green self) not supported outside git worktree ($(red "$(relDir "$(pwd)")"))"
+      return 0
+    fi
+  fi
+
   if [[ ${#@} -ge 2 ]]; then usage && return 1
   elif [[ ${#@} -eq 1 ]]; then
     case "$1" in
@@ -152,6 +165,10 @@ function git_sync_main() {
       -vv|--very-verbose) GIT_SYNC_VERBOSE=2 ;;
       *) usage && return 1 ;;
     esac
+  fi
+
+  if [[ -n $GIT_SYNC_IN_SELF_LOOP ]]; then
+    echo "Syncing $(green self) ($(yellow "$(relDir "$(pwd)")")) ..."
   fi
 
   # fetch from remotes
