@@ -15,16 +15,25 @@
 
 # git-sync
 # https://github.com/ctubbsii/git-sync
-GIT_SYNC_VERSION='1.3.0'
+GIT_SYNC_VERSION='1.3.1'
 
 # catch most errors
 set -eE
 trap 'echo "[ERROR] Error occurred at $BASH_SOURCE:$LINENO command: $BASH_COMMAND"' ERR
 
 # utilities for color output
-function terminalSupportsColor() { local c; c=$(tput colors 2>/dev/null) || c=-1; [[ -t 1 && $c -ge 8 ]]; }
+function terminalSupportsColor() {
+  local c
+  c=$(tput colors 2>/dev/null) || c=-1
+  [[ -t 1 && $c -ge 8 ]]
+}
 terminalSupportsColor && doColor=1 || doColor=0
-function color() { local c; c=$1; shift; [[ $doColor -eq 1 ]] && echo -e "\\e[0;${c}m${*}\\e[0m" || echo "$@"; }
+function color() {
+  local c
+  c=$1
+  shift
+  [[ $doColor -eq 1 ]] && echo -e "\\e[0;${c}m${*}\\e[0m" || echo "$@"
+}
 function red() { color 31 "$@"; }
 function green() { color 32 "$@"; }
 function yellow() { color 33 "$@"; }
@@ -33,7 +42,10 @@ function yellow() { color 33 "$@"; }
 function relDir() {
   local orig=$1 rel
   # allow override
-  if [[ -n $GIT_SYNC_ABS_DIRS ]]; then echo "$orig"; return 0; fi
+  if [[ -n $GIT_SYNC_ABS_DIRS ]]; then
+    echo "$orig"
+    return 0
+  fi
   # tilde intended literally, expansion not expected
   # shellcheck disable=SC2088
   rel="~/$(realpath --relative-to="$(cd ~ && pwd)" "$orig" 2>/dev/null)" || rel=$orig
@@ -58,8 +70,8 @@ function log() {
 }
 function isVerbose() { [[ $GIT_SYNC_VERBOSE -ge 1 ]] || return 1; }
 function isVVerbose() { [[ $GIT_SYNC_VERBOSE -ge 2 ]] || return 1; }
-function logVerbose() { if isVerbose; then log "$@"; fi }
-function logVVerbose() { if isVVerbose; then log "$@"; fi }
+function logVerbose() { if isVerbose; then log "$@"; fi; }
+function logVVerbose() { if isVVerbose; then log "$@"; fi; }
 function usage() { log 'Usage: git sync [self] [-V | --version | -v | --verbose | -vv | --very-verbose]'; }
 
 # get the remote tracking branch information, given a local branch name
@@ -157,12 +169,13 @@ function git_sync_main() {
     fi
   fi
 
-  if [[ ${#@} -ge 2 ]]; then usage && return 1
+  if [[ ${#@} -ge 2 ]]; then
+    usage && return 1
   elif [[ ${#@} -eq 1 ]]; then
     case "$1" in
-      -V|--version) echo "$GIT_SYNC_VERSION" && return 0 ;;
-      -v|--verbose) GIT_SYNC_VERBOSE=1 ;;
-      -vv|--very-verbose) GIT_SYNC_VERBOSE=2 ;;
+      -V | --version) echo "$GIT_SYNC_VERSION" && return 0 ;;
+      -v | --verbose) GIT_SYNC_VERBOSE=1 ;;
+      -vv | --very-verbose) GIT_SYNC_VERBOSE=2 ;;
       *) usage && return 1 ;;
     esac
   fi
