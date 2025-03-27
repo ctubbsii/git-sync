@@ -9,7 +9,7 @@ To use, add the script to your `PATH` environment variable and make it
 executable.
 
 
-[ci_img]: https://github.com/ctubbsii/git-sync/workflows/ShellCheck/badge.svg
-[ci_link]: https://github.com/ctubbsii/git-sync/actions
+[ci_img]: https://github.com/ctubbsii/git-sync/actions/workflows/shellcheck.yaml/badge.svg
+[ci_link]: https://github.com/ctubbsii/git-sync/actions/workflows/shellcheck.yaml
 [li]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
 [ll]: https://github.com/ctubbsii/git-sync/blob/main/LICENSE
